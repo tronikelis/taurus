@@ -1,7 +1,6 @@
 use std::env;
 use std::fs;
 use std::io;
-use std::io::Write;
 use std::thread;
 
 use anyhow::{Result as AnyResult, anyhow};
@@ -42,41 +41,48 @@ pub fn command_info(args: &Args) -> AnyResult<()> {
     Ok(())
 }
 
+fn makepkg_install(dir: &str) -> AnyResult<()> {
+    println!("Running makepkg");
+    system::run_inherit(Some(dir), ["makepkg", "--clean", "--install", "--syncdeps"])?;
+    Ok(())
+}
+
 fn clone_and_install(package: &str, package_directory: &str) -> AnyResult<()> {
     let clone_url = format!("https://aur.archlinux.org/{}.git", package);
     println!("Cloning {}", &clone_url);
     system::run_null(None, ["git", "clone", &clone_url, &package_directory])?;
 
-    println!("Printing repository files");
+    if !aur::is_package_installed(package)? {
+        println!("Printing repository files");
+        thread::scope(|s| {
+            let (reader, writer) = io::pipe()?;
 
-    thread::scope(|s| {
-        let (reader, writer) = io::pipe()?;
+            let git_worker = s.spawn(|| review::run_git_repo_diff_all(package_directory, writer));
+            review::run_pager_git(package_directory, reader)?;
 
-        let git_worker = s.spawn(|| review::run_git_repo_diff_all(package_directory, writer));
-        review::run_pager_git(package_directory, reader)?;
+            git_worker.join().expect("no panic")?;
+            anyhow::Ok(())
+        })?;
 
-        git_worker.join().expect("no panic")?;
-        anyhow::Ok(())
-    })?;
+        review::ask_for_permission("install")?;
+        makepkg_install(package_directory)?;
 
-    print!("Proceed with install [Y/n]? ");
-    io::stdout().flush()?;
-
-    let mut choice = String::new();
-    io::stdin().read_line(&mut choice)?;
-
-    println!("Running makepkg");
-    if choice.to_lowercase() != "n" {
-        system::run_inherit(Some(package_directory), ["makepkg", "--clean", "--install"])?;
+        return Ok(());
     }
 
+    update_and_install(package_directory, package)?;
     Ok(())
 }
 
-fn update_and_install(package_directory: &str) -> AnyResult<()> {
+fn update_and_install(package_directory: &str, package: &str) -> AnyResult<()> {
     println!("Fetching git remote");
 
     system::run_null(Some(package_directory), ["git", "fetch"])?;
+
+    if aur::is_package_up_to_date(package_directory, package)? {
+        println!("Package {} is up to date", package);
+        return Ok(());
+    }
 
     thread::scope(|s| {
         let (reader, writer) = io::pipe()?;
@@ -93,6 +99,11 @@ fn update_and_install(package_directory: &str) -> AnyResult<()> {
         git_worker.join().expect("no panic")?;
         anyhow::Ok(())
     })?;
+
+    review::ask_for_permission("install")?;
+
+    system::run_null(Some(package_directory), ["git", "reset", "--hard", "@{u}"])?;
+    makepkg_install(package_directory)?;
 
     Ok(())
 }
@@ -111,7 +122,7 @@ pub fn command_install(args: &Args) -> AnyResult<()> {
         return Ok(clone_and_install(&args.package, &package_directory)?);
     }
 
-    update_and_install(&package_directory)?;
+    update_and_install(&package_directory, &args.package)?;
 
     Ok(())
 }

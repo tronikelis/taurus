@@ -1,8 +1,9 @@
 use std::env;
 use std::io;
+use std::io::Write;
 use std::thread;
 
-use anyhow::Result as AnyResult;
+use anyhow::{Result as AnyResult, anyhow};
 
 use crate::system;
 
@@ -67,4 +68,19 @@ pub fn run_git_repo_diff_all(repo_directory: &str, writer: impl io::Write + Send
     )?;
 
     Ok(())
+}
+
+pub fn ask_for_permission(action: &str) -> AnyResult<()> {
+    print!("Proceed with {} [Y/n]? ", action);
+    io::stdout().flush()?;
+
+    let mut choice = String::new();
+    io::stdin().read_line(&mut choice)?;
+    let choice = choice.trim().to_lowercase();
+
+    if choice.is_empty() || choice == "y" {
+        return Ok(());
+    }
+
+    Err(anyhow!("user declined action: {}", action))
 }

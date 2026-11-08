@@ -1,10 +1,25 @@
 use std::env;
+use std::error;
+use std::fmt;
 use std::io;
 use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 
 use anyhow::{Result as AnyResult, anyhow};
+
+#[derive(Debug)]
+pub struct ExitCodeError {
+    pub code: i32,
+}
+
+impl fmt::Display for ExitCodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "exit code {} is not 0", &self.code)
+    }
+}
+
+impl error::Error for ExitCodeError {}
 
 pub enum StdioData<'a> {
     Writer(&'a mut (dyn io::Write + Send)),
@@ -24,6 +39,20 @@ pub fn run_reader<'a>(
         StdioData::Reader(&mut stdin),
         StdioData::Null,
         StdioData::Null,
+    )
+}
+
+pub fn run_stderr<'a>(
+    wd: Option<&str>,
+    args: impl IntoIterator<Item = &'a str>,
+    mut stderr: impl io::Write + Send,
+) -> AnyResult<()> {
+    run(
+        wd,
+        args,
+        StdioData::Null,
+        StdioData::Null,
+        StdioData::Writer(&mut stderr),
     )
 }
 
@@ -130,10 +159,10 @@ pub fn run<'a>(
     })?;
 
     if !status.success() {
-        return Err(anyhow!(
-            "exit code {} was not 0",
-            status.code().unwrap_or(-1)
-        ));
+        return Err(ExitCodeError {
+            code: status.code().unwrap_or(-1),
+        }
+        .into());
     }
 
     Ok(())

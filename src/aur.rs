@@ -1,6 +1,11 @@
+use std::path::Path;
+
+use alpm_srcinfo::SourceInfoV1;
 use anyhow::{Result as AnyResult, anyhow};
 use curl::easy::{Easy, List as EasyList};
 use serde::{Deserialize, Serialize};
+
+use crate::system;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct InfoResult {
@@ -33,13 +38,13 @@ pub struct InfoResult {
     #[serde(rename = "URLPath")]
     pub urlpath: Option<String>,
     #[serde(rename = "Depends")]
-    pub depends: Vec<String>,
+    pub depends: Option<Vec<String>>,
     #[serde(rename = "MakeDepends")]
-    pub make_depends: Vec<String>,
+    pub make_depends: Option<Vec<String>>,
     #[serde(rename = "License")]
-    pub license: Vec<String>,
+    pub license: Option<Vec<String>>,
     #[serde(rename = "Keywords")]
-    pub keywords: Vec<String>,
+    pub keywords: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -93,7 +98,7 @@ impl Client {
 
         let response_code = self.easy.response_code()?;
         if response_code != 200 {
-            return Err(anyhow!("response code {} was not 200", response_code));
+            return Err(anyhow!("response code {} is not 200", response_code));
         }
 
         Ok(output)
@@ -110,9 +115,36 @@ impl Client {
         let response: Info = serde_json::from_slice(&self.perform()?)?;
 
         if response.r#type == "error" {
-            return Err(anyhow!("response type was error"));
+            return Err(anyhow!("response type is error"));
         }
 
         Ok(response)
+    }
+}
+
+pub fn is_package_up_to_date(aur_dir: &str, package: &str) -> AnyResult<bool> {
+    let mut pacman_output = Vec::new();
+    system::run_writer(Some(aur_dir), ["pacman", "-Q", package], &mut pacman_output)?;
+    let pacman_output = String::from_utf8(pacman_output)?;
+
+    let pacman_version = pacman_output
+        .split(" ")
+        .nth(1)
+        .ok_or(anyhow!("failed parsing pacman -Q command"))?
+        .trim();
+
+    let source_info = SourceInfoV1::from_file(Path::new(&format!("{}/.SRCINFO", aur_dir)))?;
+
+    Ok(source_info.base.version.to_string() == pacman_version)
+}
+
+pub fn is_package_installed(package: &str) -> AnyResult<bool> {
+    let mut pacman_output = Vec::new();
+    match system::run_stderr(None, ["pacman", "-Q", package], &mut pacman_output) {
+        Ok(_) => Ok(true),
+        Err(v) => match v.downcast_ref::<system::ExitCodeError>() {
+            None => Err(v),
+            Some(_) => Ok(!String::from_utf8(pacman_output)?.contains("was not found")),
+        },
     }
 }
