@@ -1,6 +1,3 @@
-use std::path::Path;
-
-use alpm_srcinfo::SourceInfoV1;
 use anyhow::{Result as AnyResult, anyhow};
 use curl::easy::{Easy, List as EasyList};
 use serde::{Deserialize, Serialize};
@@ -104,6 +101,15 @@ impl Client {
         Ok(output)
     }
 
+    pub fn info_package(&mut self, name: &str) -> AnyResult<InfoResult> {
+        let info = self.info([name])?;
+        let result = info
+            .results
+            .get(0)
+            .ok_or_else(|| anyhow!("{} not found", &name))?;
+        Ok(result.clone())
+    }
+
     pub fn info<'a>(&mut self, names: impl IntoIterator<Item = &'a str>) -> AnyResult<Info> {
         let mut url = format!("/rpc/v5/info?");
         for name in names {
@@ -120,22 +126,6 @@ impl Client {
 
         Ok(response)
     }
-}
-
-pub fn is_package_up_to_date(aur_dir: &str, package: &str) -> AnyResult<bool> {
-    let mut pacman_output = Vec::new();
-    system::run_writer(Some(aur_dir), ["pacman", "-Q", package], &mut pacman_output)?;
-    let pacman_output = String::from_utf8(pacman_output)?;
-
-    let pacman_version = pacman_output
-        .split(" ")
-        .nth(1)
-        .ok_or(anyhow!("failed parsing pacman -Q command"))?
-        .trim();
-
-    let source_info = SourceInfoV1::from_file(Path::new(&format!("{}/.SRCINFO", aur_dir)))?;
-
-    Ok(source_info.base.version.to_string() == pacman_version)
 }
 
 pub fn is_package_installed(package: &str) -> AnyResult<bool> {

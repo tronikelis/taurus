@@ -8,24 +8,30 @@ mod system;
 
 #[derive(Parser, Debug)]
 struct Args {
-    #[arg(short, long)]
-    package: String,
     #[command(subcommand)]
     command: Command,
 }
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    Install,
-    Info,
+    Install {
+        #[arg(short, long)]
+        package: Option<String>,
+    },
+    Info {
+        #[arg(short, long)]
+        package: Option<String>,
+    },
 }
 
 fn main() -> AnyResult<()> {
     let args = Args::parse();
 
     match args.command {
-        Command::Info => command::command_info(&args)?,
-        Command::Install => command::command_install(&args)?,
+        Command::Info { package } => command::command_info(package.as_ref().map(|v| v.as_str()))?,
+        Command::Install { package } => {
+            command::command_install(package.as_ref().map(|v| v.as_str()))?
+        }
     }
 
     Ok(())
