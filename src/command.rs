@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::env;
 use std::fs;
 use std::io;
@@ -223,6 +224,11 @@ impl InstalledPackage {
         Ok(pacman_version.to_string())
     }
 
+    fn aur_version(&self, aur_client: &mut aur::Client) -> AnyResult<String> {
+        let info = aur_client.info_package(&self.name)?;
+        Ok(info.version.clone())
+    }
+
     fn is_up_to_date(&self, aur_client: &mut aur::Client) -> AnyResult<bool> {
         let version = self.pacman_version()?;
         if let Some(info) = &self.info {
@@ -231,9 +237,7 @@ impl InstalledPackage {
             }
         }
 
-        let info = aur_client.info_package(&self.name)?;
-
-        Ok(info.version == version)
+        Ok(self.aur_version(aur_client)? == version)
     }
 
     fn new(directory: String, name: String, info: Option<alpm_srcinfo::SourceInfoV1>) -> Self {
@@ -245,7 +249,7 @@ impl InstalledPackage {
     }
 }
 
-pub fn command_info_list_installed() -> AnyResult<()> {
+pub fn command_info_list_installed(aur_client: &mut aur::Client) -> AnyResult<()> {
     let cache_directory = get_cache_directory()?;
 
     println!("Getting installed aur packages");
@@ -260,7 +264,16 @@ pub fn command_info_list_installed() -> AnyResult<()> {
             println!("{} ???", &package.name);
             continue;
         };
-        println!("{} {}", &info.base.name, &info.base.version.to_string());
+        if package.is_up_to_date(aur_client)? {
+            println!("{} {}", &info.base.name, &info.base.version.to_string());
+        } else {
+            println!(
+                "{} {} -> {}",
+                &info.base.name,
+                &info.base.version.to_string(),
+                &package.aur_version(aur_client)?
+            );
+        }
     }
 
     Ok(())
@@ -270,14 +283,15 @@ pub fn command_info_package(package: &str) -> AnyResult<()> {
     let mut aur_client = aur::Client::new();
 
     println!("Searching for {}", package);
-    // todo: replace with search
-    let info = aur_client.info([package])?;
+    let info = aur_client.search(package)?;
 
     for result in &info.results {
         println!(
-            "{} [{}] {} {}",
+            "{} [{}] {} {} {} {}",
             &result.name,
             &result.version,
+            &result.num_votes,
+            &result.popularity,
             &result.last_modified,
             &result
                 .description
@@ -291,9 +305,11 @@ pub fn command_info_package(package: &str) -> AnyResult<()> {
 }
 
 pub fn command_info(package: Option<&str>) -> AnyResult<()> {
+    let mut aur_client = aur::Client::new();
+
     match package {
         Some(v) => command_info_package(v),
-        None => command_info_list_installed(),
+        None => command_info_list_installed(&mut aur_client),
     }
 }
 
