@@ -1,15 +1,111 @@
-use std::any::Any;
 use std::env;
+use std::fmt;
 use std::fs;
 use std::io;
 use std::path::Path;
 use std::thread;
 
+use alpm_srcinfo::SourceInfoV1;
 use anyhow::{Result as AnyResult, anyhow};
+use chrono::{DateTime, Local, Utc};
 
 use crate::aur;
 use crate::review;
 use crate::system;
+
+#[derive(Debug)]
+struct PrintablePackage {
+    name: String,
+    version: String,
+    is_installed: bool,
+    votes: i64,
+    last_modified_date: DateTime<Utc>,
+    available_version: Option<String>,
+}
+
+impl PrintablePackage {
+    fn from_search_result(
+        cache_directory: &str,
+        result: &aur::SearchResult,
+        aur_client: &mut aur::Client,
+    ) -> AnyResult<Self> {
+        if result.is_installed() {
+            return Self::from_installed_package(
+                &InstalledPackage::from_package_name(cache_directory, &result.name)?,
+                aur_client,
+            );
+        }
+        Ok(Self {
+            votes: result.num_votes,
+            name: result.name.clone(),
+            version: result.version.clone(),
+            last_modified_date: DateTime::from_timestamp_secs(result.last_modified)
+                .ok_or(anyhow!("failed converting to date time"))?,
+            is_installed: result.is_installed(),
+            available_version: None,
+        })
+    }
+
+    fn from_installed_package(
+        package: &InstalledPackage,
+        aur_client: &mut aur::Client,
+    ) -> AnyResult<Self> {
+        let aur_info = aur_client.info_package(&package.name)?;
+        Ok(Self {
+            votes: aur_info.num_votes,
+            name: package.name.clone(),
+            version: package.info.base.version.to_string(),
+            last_modified_date: DateTime::from_timestamp_secs(aur_info.last_modified)
+                .ok_or(anyhow!("failed converting to date time"))?,
+            is_installed: true,
+            available_version: Some(aur_info.version.clone()),
+        })
+    }
+}
+
+impl fmt::Display for PrintablePackage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let last_update_duration = Local::now()
+            .to_utc()
+            .signed_duration_since(self.last_modified_date);
+
+        let last_update_duration_string = match () {
+            () if last_update_duration.num_hours() <= 24 => {
+                format!("{}h", last_update_duration.num_hours())
+            }
+            () if last_update_duration.num_days() <= 7 => {
+                format!("{}d", last_update_duration.num_days())
+            }
+            _ => format!("{}w", last_update_duration.num_weeks()),
+        };
+        write!(
+            f,
+            "{}{} {} {{{}}} {} {}",
+            match self.is_installed {
+                true => "(Installed) ",
+                false => "",
+            },
+            &self.name,
+            match &self.available_version {
+                Some(available_version) if available_version != &self.version => {
+                    format!("{} -> {}", &self.version, &available_version)
+                }
+                Some(_) => {
+                    format!("{} UP TO DATE", &self.version)
+                }
+                None => {
+                    format!("REMOTE {}", &self.version)
+                }
+            },
+            self.votes,
+            self.last_modified_date.format("%Y-%m-%d"),
+            match last_update_duration_string.as_ref() {
+                "" => "".to_string(),
+                v => format!("[{}]", v),
+            },
+        )
+    }
+}
 
 fn get_cache_directory() -> AnyResult<String> {
     let cache_directory =
@@ -43,8 +139,8 @@ impl Package {
         Ok(())
     }
 
-    fn is_installed(&self) -> AnyResult<bool> {
-        aur::is_package_installed(&self.name)
+    fn is_installed(&self) -> bool {
+        aur::is_package_installed(&aur::PackageNameFull::new(&self.name, &self.info.version))
     }
 
     fn makepkg_install(&self) -> AnyResult<()> {
@@ -89,14 +185,14 @@ impl Package {
     }
 
     fn update(&self, aur_client: &mut aur::Client) -> AnyResult<()> {
-        println!("Fetching git remote");
-        self.git_fetch()?;
-
         let installed_package = InstalledPackage::from_dir_entry(&self.package_directory)?;
         if installed_package.is_up_to_date(aur_client)? {
             println!("Package {} is up to date", &self.name);
             return Ok(());
         }
+
+        println!("Fetching git remote");
+        self.git_fetch()?;
 
         self.git_diff_remote()?;
         review::ask_for_permission("install")?;
@@ -127,7 +223,7 @@ impl Package {
             self.git_clone()?;
         }
 
-        if !self.is_installed()? {
+        if !self.is_installed() {
             println!("Printing repository files");
             self.git_diff_all()?;
             review::ask_for_permission("install")?;
@@ -151,12 +247,8 @@ impl InstalledPackages {
         for item in fs::read_dir(base)? {
             let item = item?;
 
-            let name = item
-                .file_name()
-                .to_str()
-                .ok_or(anyhow!("filename is not valid unicode"))?
-                .to_string();
-            if !aur::is_package_installed(&name)? {
+            let info = SourceInfoV1::from_file(&item.path().join(".SRCINFO"))?;
+            if !aur::is_package_installed(&aur::PackageNameFull::from_source_info(&info)) {
                 fs::remove_dir_all(item.path())?;
                 continue;
             }
@@ -176,12 +268,21 @@ impl InstalledPackages {
 struct InstalledPackage {
     directory: String,
     name: String,
-    info: Option<alpm_srcinfo::SourceInfoV1>,
+    info: SourceInfoV1,
 }
 
 impl InstalledPackage {
+    fn from_package_name(cache_directory: &str, package: &str) -> AnyResult<Self> {
+        Self::from_dir_entry(&format!("{}/{}", cache_directory, package))
+    }
+
     fn from_dir_entry(dir: &str) -> AnyResult<Self> {
         let path = Path::new(dir);
+
+        let info = SourceInfoV1::from_file(&path.join(".SRCINFO"))?;
+        if !aur::is_package_installed(&aur::PackageNameFull::from_source_info(&info)) {
+            return Err(anyhow!("package {} is not installed", info.base.name));
+        }
 
         let name = path
             .file_name()
@@ -189,21 +290,11 @@ impl InstalledPackage {
             .to_str()
             .ok_or(anyhow!("filename is not valid unicode"))?
             .to_string();
-        if !aur::is_package_installed(&name)? {
-            return Err(anyhow!("package {} is not installed", &name));
-        }
 
         let directory = path
             .to_str()
             .ok_or(anyhow!("path is not valid unicode"))?
             .to_string();
-
-        let mut info = None;
-        if path.join(".SRCINFO").exists() {
-            info = Some(alpm_srcinfo::SourceInfoV1::from_file(
-                &path.join(".SRCINFO"),
-            )?);
-        }
 
         Ok(Self::new(directory, name, info))
     }
@@ -216,12 +307,20 @@ impl InstalledPackage {
             &mut pacman_output,
         )?;
         let pacman_output = String::from_utf8(pacman_output)?.trim().to_string();
-        let pacman_version = pacman_output
-            .split(" ")
-            .nth(1)
-            .ok_or(anyhow!("failed parsing pacman -Q command"))?
-            .trim();
-        Ok(pacman_version.to_string())
+        for line in pacman_output.lines() {
+            let mut iter = line.split(" ");
+            let Some(name) = iter.next().map(|v| v.trim()) else {
+                continue;
+            };
+            let Some(version) = iter.next().map(|v| v.trim()) else {
+                continue;
+            };
+            if name == self.name {
+                return Ok(version.to_string());
+            }
+        }
+
+        Err(anyhow!("could not find pacman version for {}", &self.name))
     }
 
     fn aur_version(&self, aur_client: &mut aur::Client) -> AnyResult<String> {
@@ -231,16 +330,22 @@ impl InstalledPackage {
 
     fn is_up_to_date(&self, aur_client: &mut aur::Client) -> AnyResult<bool> {
         let version = self.pacman_version()?;
-        if let Some(info) = &self.info {
-            if info.base.version.to_string() != version {
-                return Ok(false);
-            }
+        if self.info.base.version.to_string() != version {
+            return Ok(false);
         }
 
         Ok(self.aur_version(aur_client)? == version)
     }
 
-    fn new(directory: String, name: String, info: Option<alpm_srcinfo::SourceInfoV1>) -> Self {
+    fn to_package(
+        &self,
+        aur_client: &mut aur::Client,
+        cache_directory: &str,
+    ) -> AnyResult<Package> {
+        Package::new(self.name.clone(), aur_client, cache_directory)
+    }
+
+    fn new(directory: String, name: String, info: SourceInfoV1) -> Self {
         Self {
             directory,
             name,
@@ -260,45 +365,25 @@ pub fn command_info_list_installed(aur_client: &mut aur::Client) -> AnyResult<()
     }
 
     for package in &installed_packages.packages {
-        let Some(info) = &package.info else {
-            println!("{} ???", &package.name);
-            continue;
-        };
-        if package.is_up_to_date(aur_client)? {
-            println!("{} {}", &info.base.name, &info.base.version.to_string());
-        } else {
-            println!(
-                "{} {} -> {}",
-                &info.base.name,
-                &info.base.version.to_string(),
-                &package.aur_version(aur_client)?
-            );
-        }
+        let printable = PrintablePackage::from_installed_package(package, aur_client)?;
+        println!("{}", printable);
     }
 
     Ok(())
 }
 
-pub fn command_info_package(package: &str) -> AnyResult<()> {
-    let mut aur_client = aur::Client::new();
-
+pub fn command_info_package(
+    cache_directory: &str,
+    package: &str,
+    aur_client: &mut aur::Client,
+) -> AnyResult<()> {
     println!("Searching for {}", package);
-    let info = aur_client.search(package)?;
+    let mut info = aur_client.search(package)?;
+    info.results.sort_by_key(|v| v.num_votes);
 
     for result in &info.results {
-        println!(
-            "{} [{}] {} {} {} {}",
-            &result.name,
-            &result.version,
-            &result.num_votes,
-            &result.popularity,
-            &result.last_modified,
-            &result
-                .description
-                .as_ref()
-                .map(|f| f.as_str())
-                .unwrap_or(""),
-        );
+        let printable = PrintablePackage::from_search_result(cache_directory, result, aur_client)?;
+        println!("{}", printable);
     }
 
     Ok(())
@@ -306,19 +391,43 @@ pub fn command_info_package(package: &str) -> AnyResult<()> {
 
 pub fn command_info(package: Option<&str>) -> AnyResult<()> {
     let mut aur_client = aur::Client::new();
+    let cache_directory = get_cache_directory()?;
 
     match package {
-        Some(v) => command_info_package(v),
+        Some(v) => command_info_package(&cache_directory, v, &mut aur_client),
         None => command_info_list_installed(&mut aur_client),
     }
 }
 
+pub fn command_install_update_all(
+    aur_client: &mut aur::Client,
+    cache_directory: &str,
+) -> AnyResult<()> {
+    println!("Getting installed packages");
+    let installed_packages = InstalledPackages::new(&cache_directory)?;
+    let packages: Vec<AnyResult<Package>> = installed_packages
+        .packages
+        .iter()
+        .map(|v| v.to_package(aur_client, cache_directory))
+        .collect();
+
+    for package in packages {
+        let package = package?;
+        println!("Updating {}", &package.name);
+        package.install_or_update(aur_client)?;
+    }
+
+    Ok(())
+}
+
 pub fn command_install(package: Option<&str>) -> AnyResult<()> {
-    let package = package.unwrap();
-
     let cache_directory = get_cache_directory()?;
-
     let mut aur_client = aur::Client::new();
+
+    let Some(package) = package else {
+        return command_install_update_all(&mut aur_client, &cache_directory);
+    };
+
     let package = Package::new(package.to_string(), &mut aur_client, &cache_directory)?;
 
     package.install_or_update(&mut aur_client)?;

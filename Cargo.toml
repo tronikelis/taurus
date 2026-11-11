@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 alpm-srcinfo = { version = "0.7.0" }
 anyhow = { version = "1.0.104" }
+chrono = { version = "0.4.45" }
 clap = { version = "4.6.7", features = ["derive"] }
 curl = { version = "0.4.51" }
 serde = { version = "1.0.229", features = ["derive"] }

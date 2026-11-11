@@ -1,8 +1,27 @@
+use std::path::Path;
+
 use anyhow::{Result as AnyResult, anyhow};
 use curl::easy::{Easy, List as EasyList};
 use serde::{Deserialize, Serialize};
 
-use crate::system;
+#[derive(Debug, Clone)]
+pub struct PackageNameFull(String);
+
+impl PackageNameFull {
+    pub fn new(name: &str, version: &str) -> Self {
+        Self(format!("{}-{}", name, version))
+    }
+
+    pub fn from_source_info(info: &alpm_srcinfo::SourceInfoV1) -> Self {
+        Self::new(&info.base.name.to_string(), &info.base.version.to_string())
+    }
+}
+
+impl ToString for PackageNameFull {
+    fn to_string(&self) -> String {
+        self.0.clone()
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct InfoResult {
@@ -83,6 +102,16 @@ pub struct SearchResult {
     pub url_path: Option<String>,
     #[serde(rename = "URL")]
     pub url: Option<String>,
+}
+
+impl SearchResult {
+    pub fn get_package_name_full(&self) -> PackageNameFull {
+        PackageNameFull::new(&self.name, &self.version)
+    }
+
+    pub fn is_installed(&self) -> bool {
+        is_package_installed(&self.get_package_name_full())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -184,13 +213,8 @@ impl Client {
     }
 }
 
-pub fn is_package_installed(package: &str) -> AnyResult<bool> {
-    let mut pacman_output = Vec::new();
-    match system::run_stderr(None, ["pacman", "-Q", package], &mut pacman_output) {
-        Ok(_) => Ok(true),
-        Err(v) => match v.downcast_ref::<system::ExitCodeError>() {
-            None => Err(v),
-            Some(_) => Ok(!String::from_utf8(pacman_output)?.contains("was not found")),
-        },
-    }
+pub fn is_package_installed(package_name: &PackageNameFull) -> bool {
+    Path::new("/var/lib/pacman/local")
+        .join(&package_name.to_string())
+        .exists()
 }

@@ -28,34 +28,6 @@ pub enum StdioData<'a> {
     Inherit,
 }
 
-pub fn run_reader<'a>(
-    wd: Option<&str>,
-    args: impl IntoIterator<Item = &'a str>,
-    mut stdin: impl io::Read + Send,
-) -> AnyResult<()> {
-    run(
-        wd,
-        args,
-        StdioData::Reader(&mut stdin),
-        StdioData::Null,
-        StdioData::Null,
-    )
-}
-
-pub fn run_stderr<'a>(
-    wd: Option<&str>,
-    args: impl IntoIterator<Item = &'a str>,
-    mut stderr: impl io::Write + Send,
-) -> AnyResult<()> {
-    run(
-        wd,
-        args,
-        StdioData::Null,
-        StdioData::Null,
-        StdioData::Writer(&mut stderr),
-    )
-}
-
 pub fn run_writer<'a>(
     wd: Option<&str>,
     args: impl IntoIterator<Item = &'a str>,
