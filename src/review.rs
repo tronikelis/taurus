@@ -1,7 +1,5 @@
-use std::env;
-use std::io;
 use std::io::Write;
-use std::thread;
+use std::{env, io, thread};
 
 use anyhow::{Result as AnyResult, anyhow};
 

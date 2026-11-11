@@ -1,17 +1,11 @@
-use std::env;
-use std::fmt;
-use std::fs;
-use std::io;
 use std::path::Path;
-use std::thread;
+use std::{env, fmt, fs, io, thread};
 
 use alpm_srcinfo::SourceInfoV1;
 use anyhow::{Result as AnyResult, anyhow};
 use chrono::{DateTime, Local, Utc};
 
-use crate::aur;
-use crate::review;
-use crate::system;
+use crate::{aur, review, system};
 
 #[derive(Debug)]
 struct PrintablePackage {

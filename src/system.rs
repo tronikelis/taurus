@@ -1,12 +1,51 @@
-use std::env;
-use std::error;
-use std::fmt;
-use std::io;
+use std::collections::HashSet;
 use std::path::Path;
-use std::process::{Command, ExitStatus, Stdio};
-use std::thread;
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{LazyLock, Mutex};
+use std::thread::JoinHandle;
+use std::{env, error, fmt, io, thread};
 
 use anyhow::{Result as AnyResult, anyhow};
+use nix::sys::signal;
+use nix::unistd;
+use signal_hook::iterator::Signals;
+
+static CHILD_KILL_GUARDS: LazyLock<Mutex<HashSet<ChildKillGuard>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+static CHILDREN_CLEANUP_THREAD: LazyLock<JoinHandle<()>> = LazyLock::new(|| {
+    thread::spawn(|| {
+        for _ in Signals::new([signal::SIGTERM as i32, signal::SIGINT as i32])
+            .expect("Signals::new")
+            .forever()
+        {
+            CHILD_KILL_GUARDS.lock().expect("lock not poisoned").clear();
+        }
+    })
+});
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+struct ChildKillGuard {
+    id: unistd::Pid,
+}
+
+impl ChildKillGuard {
+    fn insert(child: &Child) {
+        let _ = *CHILDREN_CLEANUP_THREAD;
+        CHILD_KILL_GUARDS
+            .lock()
+            .expect("lock not poisoned")
+            .insert(Self {
+                id: unistd::Pid::from_raw(child.id() as _),
+            });
+    }
+}
+
+impl Drop for ChildKillGuard {
+    fn drop(&mut self) {
+        let _ = signal::kill(self.id, signal::SIGTERM);
+    }
+}
 
 #[derive(Debug)]
 pub struct ExitCodeError {
@@ -94,6 +133,7 @@ pub fn run<'a>(
     };
 
     let mut child = child.spawn()?;
+    ChildKillGuard::insert(&child);
 
     let child_stdin = child.stdin.take();
     let child_stdout = child.stdout.take();

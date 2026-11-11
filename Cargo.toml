@@ -9,5 +9,7 @@ anyhow = { version = "1.0.104" }
 chrono = { version = "0.4.45" }
 clap = { version = "4.6.7", features = ["derive"] }
 curl = { version = "0.4.51" }
+nix = { version = "0.31.3", features = ["signal"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154" }
+signal-hook = { version = "0.4.6" }
