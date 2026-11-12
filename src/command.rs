@@ -167,12 +167,24 @@ impl Package {
         Ok(())
     }
 
-    fn git_reset_hard_remote(&self) -> AnyResult<()> {
+    fn git_reset_hard(&self, head: &str) -> AnyResult<()> {
         system::run_null(
             Some(&self.package_directory),
-            ["git", "reset", "--hard", "@{u}"],
+            ["git", "reset", "--hard", head],
         )?;
         Ok(())
+    }
+
+    /// Returns head before the operation
+    fn git_reset_hard_remote(&self) -> AnyResult<String> {
+        let mut sha_stdout = Vec::new();
+        system::run_writer(
+            Some(&self.package_directory),
+            ["git", "rev-parse", "@"],
+            &mut sha_stdout,
+        )?;
+        self.git_reset_hard("@{u}")?;
+        Ok(String::from_utf8(sha_stdout)?.trim().to_string())
     }
 
     fn update(&self, aur_client: &mut aur::Client) -> AnyResult<()> {
@@ -188,8 +200,11 @@ impl Package {
         self.git_diff_remote()?;
         review::ask_for_permission("install")?;
 
-        self.makepkg_install()?;
-        self.git_reset_hard_remote()?;
+        let revert_head = self.git_reset_hard_remote()?;
+        if let Err(v) = self.makepkg_install() {
+            self.git_reset_hard(&revert_head)?;
+            return Err(v);
+        }
 
         Ok(())
     }
