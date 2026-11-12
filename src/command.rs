@@ -138,7 +138,14 @@ impl Package {
         println!("Running makepkg");
         system::run_inherit(
             Some(&self.package_directory),
-            ["makepkg", "--clean", "--install", "--syncdeps", "--force"],
+            [
+                "makepkg",
+                "--clean",
+                "--cleanbuild",
+                "--install",
+                "--syncdeps",
+                "--force",
+            ],
         )?;
         Ok(())
     }
