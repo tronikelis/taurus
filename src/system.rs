@@ -10,40 +10,45 @@ use nix::sys::signal;
 use nix::unistd;
 use signal_hook::iterator::Signals;
 
-static CHILD_KILL_GUARDS: LazyLock<Mutex<HashSet<ChildKillGuard>>> =
+static PENDING_CHILD_IDS: LazyLock<Mutex<HashSet<u32>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
-static CHILDREN_CLEANUP_THREAD: LazyLock<JoinHandle<()>> = LazyLock::new(|| {
+static CHILD_KILL_GUARD_CLEANUP_THREAD: LazyLock<JoinHandle<()>> = LazyLock::new(|| {
     thread::spawn(|| {
         for _ in Signals::new([signal::SIGTERM as i32, signal::SIGINT as i32])
             .expect("Signals::new")
             .forever()
         {
-            CHILD_KILL_GUARDS.lock().expect("lock not poisoned").clear();
+            for id in PENDING_CHILD_IDS.lock().expect("lock not poisoned").iter() {
+                let _ = signal::kill(unistd::Pid::from_raw(*id as _), signal::SIGTERM);
+            }
         }
     })
 });
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 struct ChildKillGuard {
-    id: unistd::Pid,
+    id: u32,
 }
 
 impl ChildKillGuard {
-    fn insert(child: &Child) {
-        let _ = *CHILDREN_CLEANUP_THREAD;
-        CHILD_KILL_GUARDS
+    fn new(child: &Child) -> Self {
+        let _ = *CHILD_KILL_GUARD_CLEANUP_THREAD;
+        let id = child.id();
+        PENDING_CHILD_IDS
             .lock()
             .expect("lock not poisoned")
-            .insert(Self {
-                id: unistd::Pid::from_raw(child.id() as _),
-            });
+            .insert(id);
+        Self { id }
     }
 }
 
 impl Drop for ChildKillGuard {
     fn drop(&mut self) {
-        let _ = signal::kill(self.id, signal::SIGTERM);
+        PENDING_CHILD_IDS
+            .lock()
+            .expect("lock not poisoned")
+            .remove(&self.id);
     }
 }
 
@@ -133,7 +138,7 @@ pub fn run<'a>(
     };
 
     let mut child = child.spawn()?;
-    ChildKillGuard::insert(&child);
+    let _guard = ChildKillGuard::new(&child);
 
     let child_stdin = child.stdin.take();
     let child_stdout = child.stdout.take();

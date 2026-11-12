@@ -23,7 +23,8 @@ impl PrintablePackage {
         result: &aur::SearchResult,
         aur_client: &mut aur::Client,
     ) -> AnyResult<Self> {
-        if result.is_installed() {
+        let is_installed = aur::is_package_installed(&result.name)?;
+        if is_installed {
             return Self::from_installed_package(
                 &InstalledPackage::from_package_name(cache_directory, &result.name)?,
                 aur_client,
@@ -35,7 +36,7 @@ impl PrintablePackage {
             version: result.version.clone(),
             last_modified_date: DateTime::from_timestamp_secs(result.last_modified)
                 .ok_or(anyhow!("failed converting to date time"))?,
-            is_installed: result.is_installed(),
+            is_installed,
             available_version: None,
         })
     }
@@ -112,18 +113,14 @@ fn get_cache_directory() -> AnyResult<String> {
 #[derive(Debug)]
 struct Package {
     name: String,
-    info: aur::InfoResult,
     package_directory: String,
 }
 
 impl Package {
-    fn new(name: String, aur_client: &mut aur::Client, cache_directory: &str) -> AnyResult<Self> {
-        let info = aur_client.info_package(&name)?;
-
+    fn new(name: String, cache_directory: &str) -> AnyResult<Self> {
         Ok(Self {
             package_directory: format!("{}/{}", cache_directory, &name),
             name,
-            info,
         })
     }
 
@@ -133,8 +130,8 @@ impl Package {
         Ok(())
     }
 
-    fn is_installed(&self) -> bool {
-        aur::is_package_installed(&aur::PackageNameFull::new(&self.name, &self.info.version))
+    fn is_installed(&self) -> AnyResult<bool> {
+        Ok(aur::is_package_installed(&self.name)?)
     }
 
     fn makepkg_install(&self) -> AnyResult<()> {
@@ -191,8 +188,8 @@ impl Package {
         self.git_diff_remote()?;
         review::ask_for_permission("install")?;
 
-        self.git_reset_hard_remote()?;
         self.makepkg_install()?;
+        self.git_reset_hard_remote()?;
 
         Ok(())
     }
@@ -217,7 +214,7 @@ impl Package {
             self.git_clone()?;
         }
 
-        if !self.is_installed() {
+        if !self.is_installed()? {
             println!("Printing repository files");
             self.git_diff_all()?;
             review::ask_for_permission("install")?;
@@ -242,7 +239,7 @@ impl InstalledPackages {
             let item = item?;
 
             let info = SourceInfoV1::from_file(&item.path().join(".SRCINFO"))?;
-            if !aur::is_package_installed(&aur::PackageNameFull::from_source_info(&info)) {
+            if !aur::is_package_installed(&info.base.name.to_string())? {
                 fs::remove_dir_all(item.path())?;
                 continue;
             }
@@ -274,8 +271,11 @@ impl InstalledPackage {
         let path = Path::new(dir);
 
         let info = SourceInfoV1::from_file(&path.join(".SRCINFO"))?;
-        if !aur::is_package_installed(&aur::PackageNameFull::from_source_info(&info)) {
-            return Err(anyhow!("package {} is not installed", info.base.name));
+        if !aur::is_package_installed(&info.base.name.to_string())? {
+            return Err(anyhow!(
+                "expected version from cache is not installed for {}",
+                info.base.name
+            ));
         }
 
         let name = path
@@ -331,12 +331,8 @@ impl InstalledPackage {
         Ok(self.aur_version(aur_client)? == version)
     }
 
-    fn to_package(
-        &self,
-        aur_client: &mut aur::Client,
-        cache_directory: &str,
-    ) -> AnyResult<Package> {
-        Package::new(self.name.clone(), aur_client, cache_directory)
+    fn to_package(&self, cache_directory: &str) -> AnyResult<Package> {
+        Package::new(self.name.clone(), cache_directory)
     }
 
     fn new(directory: String, name: String, info: SourceInfoV1) -> Self {
@@ -402,7 +398,7 @@ pub fn command_install_update_all(
     let packages: Vec<AnyResult<Package>> = installed_packages
         .packages
         .iter()
-        .map(|v| v.to_package(aur_client, cache_directory))
+        .map(|v| v.to_package(cache_directory))
         .collect();
 
     for package in packages {
@@ -422,7 +418,7 @@ pub fn command_install(package: Option<&str>) -> AnyResult<()> {
         return command_install_update_all(&mut aur_client, &cache_directory);
     };
 
-    let package = Package::new(package.to_string(), &mut aur_client, &cache_directory)?;
+    let package = Package::new(package.to_string(), &cache_directory)?;
 
     package.install_or_update(&mut aur_client)?;
     Ok(())

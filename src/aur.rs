@@ -1,27 +1,11 @@
-use std::path::Path;
+use std::{
+    fs::{self, File},
+    io::{BufRead, BufReader},
+};
 
 use anyhow::{Result as AnyResult, anyhow};
 use curl::easy::{Easy, List as EasyList};
 use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone)]
-pub struct PackageNameFull(String);
-
-impl PackageNameFull {
-    pub fn new(name: &str, version: &str) -> Self {
-        Self(format!("{}-{}", name, version))
-    }
-
-    pub fn from_source_info(info: &alpm_srcinfo::SourceInfoV1) -> Self {
-        Self::new(&info.base.name.to_string(), &info.base.version.to_string())
-    }
-}
-
-impl ToString for PackageNameFull {
-    fn to_string(&self) -> String {
-        self.0.clone()
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct InfoResult {
@@ -102,16 +86,6 @@ pub struct SearchResult {
     pub url_path: Option<String>,
     #[serde(rename = "URL")]
     pub url: Option<String>,
-}
-
-impl SearchResult {
-    pub fn get_package_name_full(&self) -> PackageNameFull {
-        PackageNameFull::new(&self.name, &self.version)
-    }
-
-    pub fn is_installed(&self) -> bool {
-        is_package_installed(&self.get_package_name_full())
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -213,8 +187,64 @@ impl Client {
     }
 }
 
-pub fn is_package_installed(package_name: &PackageNameFull) -> bool {
-    Path::new("/var/lib/pacman/local")
-        .join(&package_name.to_string())
-        .exists()
+#[derive(Debug)]
+struct PacmanDesc {
+    name: String,
+}
+
+impl PacmanDesc {
+    fn from_path(path: &str) -> AnyResult<Self> {
+        let mut file = BufReader::new(File::open(path)?);
+
+        let mut name: Option<String> = None;
+
+        let mut buf = String::new();
+        while {
+            buf.clear();
+            file.read_line(&mut buf)? != 0
+        } {
+            match &name {
+                Some(v) => return Ok(Self { name: v.clone() }),
+                _ => {}
+            }
+
+            match buf.trim() {
+                "%NAME%" => {
+                    buf.clear();
+                    file.read_line(&mut buf)?;
+                    name = Some(buf.trim().to_string());
+                }
+                _ => continue,
+            }
+        }
+
+        Err(anyhow!("failed parsing pacman desc file"))
+    }
+}
+
+pub fn is_package_installed(package: &str) -> AnyResult<bool> {
+    for installed_package in fs::read_dir("/var/lib/pacman/local")? {
+        let installed_package = installed_package?;
+
+        let filename = installed_package
+            .file_name()
+            .into_string()
+            .map_err(|v| anyhow!("cant convert {:?} to string", v))?;
+        if !filename.starts_with(package) {
+            continue;
+        }
+
+        let desc = PacmanDesc::from_path(
+            installed_package
+                .path()
+                .join("desc")
+                .to_str()
+                .ok_or(anyhow!("path is not valid unicode"))?,
+        )?;
+        if desc.name == package {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
