@@ -35,9 +35,11 @@ taurus info -p yay
 
 When updating/installing a package, a diff is shown (with `git-delta` if installed) always to review what changed.
 
-## Dependency resolution
+## AUR dependency resolution
 
-Not yet implemented
+Not yet implemented.
+
+In the meantime, install dependencies manually
 
 ## Examples
 
