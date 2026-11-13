@@ -1,7 +1,5 @@
-use std::{
-    fs::{self, File},
-    io::{BufRead, BufReader},
-};
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
 
 use anyhow::{Result as AnyResult, anyhow};
 use curl::easy::{Easy, List as EasyList};

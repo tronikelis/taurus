@@ -1,30 +1,25 @@
 use std::collections::HashSet;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::{LazyLock, Mutex};
-use std::thread::JoinHandle;
+use std::sync::atomic::{self, AtomicBool};
+use std::sync::{Arc, LazyLock, Mutex, mpsc};
+use std::time::Duration;
 use std::{env, error, fmt, io, thread};
 
 use anyhow::{Result as AnyResult, anyhow};
 use nix::sys::signal;
 use nix::unistd;
-use signal_hook::iterator::Signals;
 
-static PENDING_CHILD_IDS: LazyLock<Mutex<HashSet<u32>>> =
+use crate::EXIT;
+
+pub static PENDING_CHILD_IDS: LazyLock<Mutex<HashSet<u32>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
-static CHILD_KILL_GUARD_CLEANUP_THREAD: LazyLock<JoinHandle<()>> = LazyLock::new(|| {
-    thread::spawn(|| {
-        for _ in Signals::new([signal::SIGTERM as i32, signal::SIGINT as i32])
-            .expect("Signals::new")
-            .forever()
-        {
-            for id in PENDING_CHILD_IDS.lock().expect("lock not poisoned").iter() {
-                let _ = signal::kill(unistd::Pid::from_raw(*id as _), signal::SIGTERM);
-            }
-        }
-    })
-});
+pub fn kill_pending_child_ids() {
+    for id in PENDING_CHILD_IDS.lock().expect("lock not poisoned").iter() {
+        let _ = signal::kill(unistd::Pid::from_raw(*id as _), signal::SIGTERM);
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct ChildKillGuard {
@@ -33,7 +28,6 @@ struct ChildKillGuard {
 
 impl ChildKillGuard {
     fn new(child: &Child) -> Self {
-        let _ = *CHILD_KILL_GUARD_CLEANUP_THREAD;
         let id = child.id();
         PENDING_CHILD_IDS
             .lock()
@@ -193,4 +187,28 @@ pub fn is_executable(name: &str) -> AnyResult<bool> {
     }
 
     Ok(false)
+}
+
+/// Closure that aborts when the global crate::EXIT signal is true
+pub fn with_exit<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(func: F) -> AnyResult<T> {
+    let finish = Arc::new(AtomicBool::new(false));
+
+    let (tx, rx) = mpsc::sync_channel(1);
+
+    thread::spawn({
+        let tx = tx.clone();
+        let finish = finish.clone();
+        move || {
+            let _ = tx.send(Some(func()));
+            finish.store(true, atomic::Ordering::Relaxed);
+        }
+    });
+    thread::spawn(move || {
+        while !finish.load(atomic::Ordering::Relaxed) && !EXIT.load(atomic::Ordering::Relaxed) {
+            thread::sleep(Duration::from_millis(1));
+        }
+        let _ = tx.send(None);
+    });
+
+    Ok(rx.recv()?.ok_or(anyhow!("closure was aborted"))?)
 }

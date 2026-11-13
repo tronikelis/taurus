@@ -1,3 +1,4 @@
+use std::mem::DropGuard;
 use std::path::Path;
 use std::{env, fmt, fs, io, thread};
 
@@ -208,10 +209,13 @@ impl Package {
         review::ask_for_permission("install")?;
 
         let revert_head = self.git_reset_hard_remote()?;
-        if let Err(v) = self.makepkg_install() {
-            self.git_reset_hard(&revert_head)?;
-            return Err(v);
-        }
+        let revert_guard = DropGuard::new(revert_head, |revert_head| {
+            if let Err(v) = self.git_reset_hard(&revert_head) {
+                println!("Failed reverting git during abort {}", v);
+            }
+        });
+        self.makepkg_install()?;
+        DropGuard::dismiss(revert_guard);
 
         Ok(())
     }

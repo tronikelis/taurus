@@ -72,8 +72,11 @@ pub fn ask_for_permission(action: &str) -> AnyResult<()> {
     print!("Proceed with {} [Y/n]? ", action);
     io::stdout().flush()?;
 
-    let mut choice = String::new();
-    io::stdin().read_line(&mut choice)?;
+    let choice = system::with_exit(|| {
+        let mut choice = String::new();
+        io::stdin().read_line(&mut choice)?;
+        anyhow::Ok(choice)
+    })??;
     let choice = choice.trim().to_lowercase();
 
     if choice.is_empty() || choice == "y" {
