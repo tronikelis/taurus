@@ -1,5 +1,7 @@
 use std::collections::HashSet;
-use std::path::Path;
+use std::fs::{self, File};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{self, AtomicBool};
 use std::sync::{Arc, LazyLock, Mutex, mpsc};
@@ -211,4 +213,46 @@ pub fn with_exit<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(func: F) 
     });
 
     Ok(rx.recv()?.ok_or(anyhow!("closure was aborted"))?)
+}
+
+#[derive(Debug)]
+pub struct FileGuard {
+    path: PathBuf,
+    dismissed: bool,
+}
+
+impl FileGuard {
+    pub fn new(path: impl AsRef<Path>) -> AnyResult<Self> {
+        Ok(Self {
+            dismissed: false,
+            path: path.as_ref().to_path_buf(),
+        })
+    }
+
+    pub fn get(&self) -> AnyResult<Option<String>> {
+        if !self.path.exists() {
+            return Ok(None);
+        }
+
+        let mut string = String::new();
+        File::open(&self.path)?.read_to_string(&mut string)?;
+        Ok(Some(string))
+    }
+
+    pub fn set(&self, contents: &str) -> AnyResult<()> {
+        File::create(&self.path)?.write_all(contents.as_bytes())?;
+        Ok(())
+    }
+
+    pub fn dismiss(mut self) {
+        self.dismissed = true;
+    }
+}
+
+impl Drop for FileGuard {
+    fn drop(&mut self) {
+        if self.dismissed {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
 }

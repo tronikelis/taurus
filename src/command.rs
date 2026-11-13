@@ -1,4 +1,3 @@
-use std::mem::DropGuard;
 use std::path::Path;
 use std::{env, fmt, fs, io, thread};
 
@@ -205,17 +204,20 @@ impl Package {
         println!("Fetching git remote");
         self.git_fetch()?;
 
+        let guard =
+            system::FileGuard::new(&format!("{}/.taurus.lockfile", &self.package_directory))?;
+        if let Some(contents) = guard.get()? {
+            self.git_reset_hard(&contents)?;
+        }
+
         self.git_diff_remote()?;
         review::ask_for_permission("install")?;
 
         let revert_head = self.git_reset_hard_remote()?;
-        let revert_guard = DropGuard::new(revert_head, |revert_head| {
-            if let Err(v) = self.git_reset_hard(&revert_head) {
-                println!("Failed reverting git during abort {}", v);
-            }
-        });
+        guard.set(&revert_head)?;
+
         self.makepkg_install()?;
-        DropGuard::dismiss(revert_guard);
+        guard.dismiss();
 
         Ok(())
     }
