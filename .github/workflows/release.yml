@@ -1,8 +1,8 @@
 name: Release
 
 on:
-  release:
-    types: [created, published, released]
+  push:
+    tags: ["v*.*.*"]
 
 jobs:
   upload:
@@ -18,5 +18,5 @@ jobs:
           tar_name="taurus_x86_64.tar.gz"
           tar_name_sha256="$tar_name".sha256
           tar -czvf "$tar_name" target/release/taurus
-          sha256sum "$tar_name" >"$tar_name_sha256"
-          gh release upload {{ github.ref }} "$tar_name" "$tar_name_sha256"
+          sha256sum "$tar_name" | awk '{print $1}' >"$tar_name_sha256"
+          gh release create --generate-notes --title "{{ github.ref }}" "{{ github.ref }}" "$tar_name" "$tar_name_sha256"
