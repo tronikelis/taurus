@@ -24,4 +24,6 @@ jobs:
           tar_name_sha256="$tar_name".sha256
           tar -czvf "$tar_name" target/release/taurus
           sha256sum "$tar_name" | awk '{print $1}' >"$tar_name_sha256"
-          gh release create --generate-notes --title "${{ github.ref }}" "${{ github.ref }}" "$tar_name" "$tar_name_sha256"
+          title="${{ github.ref }}"
+          title="$(sed 's/^refs\/tags\///' <<<"$title")"
+          gh release create --notes-from-tag --title "$title" "${{ github.ref }}" "$tar_name" "$tar_name_sha256"
