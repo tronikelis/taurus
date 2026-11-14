@@ -12,11 +12,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
         run: cargo build --release
-      - name: Release
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
           tar_name="taurus_x86_64.tar.gz"
           tar_name_sha256="$tar_name".sha256
           tar -czvf "$tar_name" target/release/taurus
           sha256sum "$tar_name" | awk '{print $1}' >"$tar_name_sha256"
-          gh release create --generate-notes --title "{{ github.ref }}" "{{ github.ref }}" "$tar_name" "$tar_name_sha256"
+          gh release create --generate-notes --title "${{ github.ref }}" "${{ github.ref }}" "$tar_name" "$tar_name_sha256"
