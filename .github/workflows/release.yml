@@ -9,7 +9,14 @@ permissions:
 
 jobs:
   upload:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        runner:
+          - name: ubuntu-24.04
+            arch: amd64
+          - name: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner.name }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -20,10 +27,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          tar_name="taurus_x86_64.tar.gz"
+
+          tar_name="taurus_${{ matrix.runner.arch }}.tar.gz"
           tar_name_sha256="$tar_name".sha256
-          tar -czvf "$tar_name" target/release/taurus
+
+          mkdir -p bin
+          mv target/release/taurus bin
+          tar -czvf "$tar_name" bin
           sha256sum "$tar_name" | awk '{print $1}' >"$tar_name_sha256"
-          title="${{ github.ref }}"
-          title="$(sed 's/^refs\/tags\///' <<<"$title")"
-          gh release create --notes-from-tag --title "$title" "${{ github.ref }}" "$tar_name" "$tar_name_sha256"
+          files="$tar_name $tar_name_sha256"
+
+          function release {
+            local title="${{ github.ref }}"
+            title="$(sed 's/^refs\/tags\///' <<<"$title")"
+            gh release create \
+              --generate-notes \
+              --title "$title" \
+              "${{ github.ref }}" \
+              $files
+          }
+          function update {
+            gh release upload \
+              "${{ github.ref }}" \
+              $files
+          }
+          release || update
