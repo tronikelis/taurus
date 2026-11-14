@@ -35,7 +35,7 @@ jobs:
           mkdir -p bin
           mv target/release/taurus bin
           tar -czvf "$tar_name" bin
-          sha256sum "$tar_name" | awk '{print $1}' >"$tar_name_sha256"
+          sha256sum "$tar_name" >"$tar_name_sha256"
           files="$tar_name $tar_name_sha256"
 
           function release {
