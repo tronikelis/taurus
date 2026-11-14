@@ -31,6 +31,7 @@ enum Command {
         #[arg(short, long)]
         package: Option<String>,
     },
+    Version,
 }
 
 #[derive(Debug)]
@@ -50,6 +51,9 @@ fn start_app(tx: SyncSender<AppEvent>) -> JoinHandle<()> {
                 }
                 Command::Install { package } => {
                     command::command_install(package.as_ref().map(|v| v.as_str()))?
+                }
+                Command::Version => {
+                    command::command_version();
                 }
             }
             Ok(())

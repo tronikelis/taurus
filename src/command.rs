@@ -451,3 +451,7 @@ pub fn command_install(package: Option<&str>) -> AnyResult<()> {
     package.install_or_update(&mut aur_client)?;
     Ok(())
 }
+
+pub fn command_version() {
+    println!("v{}", env!("CARGO_PKG_VERSION"));
+}
