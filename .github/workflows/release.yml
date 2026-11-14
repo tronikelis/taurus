@@ -4,6 +4,9 @@ on:
   push:
     tags: ["v*.*.*"]
 
+permissions:
+  contents: write
+
 jobs:
   upload:
     runs-on: ubuntu-latest
