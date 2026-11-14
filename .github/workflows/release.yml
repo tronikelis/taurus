@@ -27,8 +27,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
+          tag="$(echo -n "${{ github.ref }}" | sed 's/^refs\/tags\///')"
+          echo "$tag"
+          git show "$tag"
+          git log -5 | cat
 
-          tar_name="taurus_${{ matrix.runner.arch }}.tar.gz"
+          tar_name="taurus_$tag_${{ matrix.runner.arch }}.tar.gz"
           tar_name_sha256="$tar_name".sha256
 
           mkdir -p bin
@@ -38,17 +42,15 @@ jobs:
           files="$tar_name $tar_name_sha256"
 
           function release {
-            local title="${{ github.ref }}"
-            title="$(sed 's/^refs\/tags\///' <<<"$title")"
             gh release create \
               --generate-notes \
-              --title "$title" \
-              "${{ github.ref }}" \
+              --title "$tag" \
+              "$tag" \
               $files
           }
           function update {
             gh release upload \
-              "${{ github.ref }}" \
+              "$tag" \
               $files
           }
           release || update
