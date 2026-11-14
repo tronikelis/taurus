@@ -28,11 +28,8 @@ jobs:
         run: |
           set -eu
           tag="$(echo -n "${{ github.ref }}" | sed 's/^refs\/tags\///')"
-          echo "$tag"
-          git show "$tag"
-          git log -5 | cat
 
-          tar_name="taurus_$tag_${{ matrix.runner.arch }}.tar.gz"
+          tar_name="taurus_${tag}_${{ matrix.runner.arch }}.tar.gz"
           tar_name_sha256="$tar_name".sha256
 
           mkdir -p bin
