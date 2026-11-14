@@ -1,0 +1,20 @@
+on:
+  release:
+    types: [published]
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --release
+      - name: Release
+        run: |
+          set -eu
+          tar_name="taurus_x86_64.tar.gz"
+          tar_name_sha256="$tar_name".sha256
+          tar -czvf "$tar_name" target/release/taurus
+          sha256sum "$tar_name" >"$tar_name_sha256"
+          gh release upload {{ github.ref }} "$tar_name" "$tar_name_sha256"
