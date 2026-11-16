@@ -1,11 +1,56 @@
 use std::path::Path;
-use std::{env, fmt, fs, io, thread};
+use std::{env, fs, io, thread};
 
 use alpm_srcinfo::SourceInfoV1;
 use anyhow::{Result as AnyResult, anyhow};
 use chrono::{DateTime, Local, Utc};
 
 use crate::{aur, review, system};
+
+fn tabulate(rows: &mut Vec<Vec<String>>) {
+    if rows.len() == 0 {
+        return;
+    }
+
+    let mut max_col_len: Vec<usize> = Vec::new();
+
+    for col in rows.iter_mut() {
+        for (i, value) in col.iter().enumerate() {
+            max_col_len.resize(max_col_len.len().max(i + 1), 0);
+            if value.len() > max_col_len[i] {
+                max_col_len[i] = value.len();
+            }
+        }
+    }
+
+    for col in rows {
+        for (i, value) in col.iter_mut().enumerate() {
+            let space_count = max_col_len[i] - value.len();
+            value.push_str(&" ".to_string().repeat(space_count));
+        }
+    }
+}
+
+fn print_printable_packages(
+    mut writer: impl io::Write,
+    packages: &[PrintablePackage],
+) -> AnyResult<()> {
+    let mut table = Vec::new();
+    for v in packages {
+        table.push(v.to_printable_list());
+    }
+
+    tabulate(&mut table);
+
+    for row in table {
+        for col in row {
+            write!(writer, "{} ", col)?;
+        }
+        writer.write_all(b"\n")?;
+    }
+
+    Ok(())
+}
 
 #[derive(Debug)]
 struct PrintablePackage {
@@ -56,10 +101,8 @@ impl PrintablePackage {
             available_version: Some(aur_info.version.clone()),
         })
     }
-}
 
-impl fmt::Display for PrintablePackage {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn to_printable_list(&self) -> Vec<String> {
         let last_update_duration = Local::now()
             .to_utc()
             .signed_duration_since(self.last_modified_date);
@@ -73,32 +116,33 @@ impl fmt::Display for PrintablePackage {
             }
             _ => format!("{}w", last_update_duration.num_weeks()),
         };
-        write!(
-            f,
-            "{}{} {} {{{}}} {} {}",
+
+        [
             match self.is_installed {
-                true => "(Installed) ",
+                true => "(Ins)",
                 false => "",
-            },
-            &self.name,
+            }
+            .to_string(),
+            format!("{}", self.name),
             match &self.available_version {
                 Some(available_version) if available_version != &self.version => {
-                    format!("{} -> {}", &self.version, &available_version)
+                    format!("NEW {} -> {}", &self.version, &available_version)
                 }
                 Some(_) => {
-                    format!("{} UP TO DATE", &self.version)
+                    format!("UP  {}", &self.version)
                 }
                 None => {
-                    format!("REMOTE {}", &self.version)
+                    format!("REM {}", &self.version)
                 }
             },
-            self.votes,
-            self.last_modified_date.format("%Y-%m-%d"),
+            format!("{{{}}}", self.votes),
+            self.last_modified_date.format("%Y-%m-%d").to_string(),
             match last_update_duration_string.as_ref() {
                 "" => "".to_string(),
                 v => format!("[{}]", v),
             },
-        )
+        ]
+        .to_vec()
     }
 }
 
@@ -382,10 +426,12 @@ pub fn command_info_list_installed(aur_client: &mut aur::Client) -> AnyResult<()
         println!("No packages are tracked, install some!");
     }
 
-    for package in &installed_packages.packages {
-        let printable = PrintablePackage::from_installed_package(package, aur_client)?;
-        println!("{}", printable);
-    }
+    let printable_packages: Vec<PrintablePackage> = installed_packages
+        .packages
+        .iter()
+        .map(|v| PrintablePackage::from_installed_package(v, aur_client))
+        .collect::<AnyResult<_>>()?;
+    print_printable_packages(io::stdout(), &printable_packages)?;
 
     Ok(())
 }
@@ -399,10 +445,12 @@ pub fn command_info_package(
     let mut info = aur_client.search(package)?;
     info.results.sort_by_key(|v| v.num_votes);
 
-    for result in &info.results {
-        let printable = PrintablePackage::from_search_result(cache_directory, result, aur_client)?;
-        println!("{}", printable);
-    }
+    let printable_packages: Vec<PrintablePackage> = info
+        .results
+        .iter()
+        .map(|v| PrintablePackage::from_search_result(cache_directory, v, aur_client))
+        .collect::<AnyResult<_>>()?;
+    print_printable_packages(io::stdout(), &printable_packages)?;
 
     Ok(())
 }
